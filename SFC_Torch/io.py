@@ -126,6 +126,10 @@ class PDBParser(object):
                 header = structure.make_mmcif_headers().as_string().split("\n")
         elif isinstance(data, gemmi.Structure):
             structure = data
+            try:
+                header = structure.make_pdb_headers().split("\n")
+            except:
+                header = structure.make_mmcif_headers().as_string().split("\n")
         else:
             raise KeyError(
                 "data should be path str to a pdb file or a gemmi.Structure object"
