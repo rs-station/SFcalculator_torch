@@ -99,7 +99,8 @@ def expand_to_p1(spacegroup, Hasu_array, Fasu_tensor, Batch=False, dmin_mask=6.0
         # Single model calculation
         assert Fasu_tensor.dim() == 1, "Give single Fasu if you set Batch=False!"
         concat_axis = 0
-    if dmin_mask is not None:
+    if dmin_mask is not None: # this was it originally 
+    # if dmin_mask is None:
         # expands to p1 with resolution set by dmin_mask, to remove high-frequency noise.
         dHKL = unitcell.calculate_d_array(Hasu_array).astype("float32") # type: ignore
         new_hkl_inds_bool = (dHKL >= dmin_mask)
@@ -109,6 +110,8 @@ def expand_to_p1(spacegroup, Hasu_array, Fasu_tensor, Batch=False, dmin_mask=6.0
         if Batch:
             Fasu_tensor = Fasu_tensor[:,new_hkl_inds_bool]
         else: 
+            print('Fasu_tensor shape: ', Fasu_tensor.shape) #3253
+            print('new_hkl_inds_bool shape: ', new_hkl_inds_bool.shape) #3255
             Fasu_tensor = Fasu_tensor[new_hkl_inds_bool]
 
     Fp1_tensor = Fasu_tensor
