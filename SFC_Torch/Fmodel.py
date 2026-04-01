@@ -589,12 +589,22 @@ class SFcalculator(object):
             ), "Must have resolution stored in dHasu attribute!"
             d = self.dHasu
         assignments, edges = bin_by_logarithmic(d, bins, Nmin)
-        self.n_bins = bins
-        self.bins = assignments
-        self.bin_labels = [
+        # FIX: Reindex bins to be contiguous 0, 1, 2, ... instead of sparse 0, 1, 5, 8, ...
+        # This is necessary after downsampling which can create empty bins
+        unique_bins_original = np.sort(np.unique(assignments))
+        self.n_bins = len(unique_bins_original)
+        
+        # Create mapping from original bin numbers to contiguous indices
+        bin_mapping = {old_bin: new_idx for new_idx, old_bin in enumerate(unique_bins_original)}
+        # Remap all assignments to contiguous indices
+        self.bins = np.array([bin_mapping[b] for b in assignments])
+        
+        # Only create labels for bins that actually have data
+        all_labels = [
             f"{e1:{format_str}} - {e2:{format_str}}"
             for e1, e2 in zip(edges[:-1], edges[1:])
         ]
+        self.bin_labels = [all_labels[i] for i in unique_bins_original]
         if return_labels:
             return self.bin_labels
 
