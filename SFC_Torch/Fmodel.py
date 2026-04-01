@@ -872,7 +872,8 @@ class SFcalculator(object):
         Note: Only work when you have mtz data, self.Fo
         """
         uanisos = []
-        for bin_i in np.sort(np.unique(self.bins)):
+        # FIX: Enumerate to map bin numbers to list indices  
+        for list_idx, bin_i in enumerate(np.sort(np.unique(self.bins))):
             index_i = (self.bins == bin_i) & (~self.free_flag) & (~self.Outlier)
             s = self.HKL_array[index_i]
             V = np.concatenate([s**2, 2 * s[:, [0, 2, 1]] * s[:, [1, 0, 2]]], axis=-1)
@@ -880,10 +881,10 @@ class SFcalculator(object):
                 torch.log(
                     self.Fo[index_i]
                     / (
-                        self.kisos[bin_i]
+                        self.kisos[list_idx]  # FIX: Use list_idx instead of bin_i
                         * torch.abs(
                             self.Fprotein_HKL[index_i]
-                            + self.kmasks[bin_i] * self.Fmask_HKL[index_i]
+                            + self.kmasks[list_idx] * self.Fmask_HKL[index_i]  # FIX: Use list_idx
                         )
                     )
                 )
