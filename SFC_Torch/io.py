@@ -120,10 +120,16 @@ class PDBParser(object):
         if isinstance(data, str):
             if data.endswith("pdb"):
                 structure = gemmi.read_pdb(data)
+                header = structure.make_pdb_headers().split("\n")
             elif data.endswith("cif"):
-                structure = gemmi.make_structure_from_block(gemmi.cif.read(data)[0])
+                structure = gemmi.read_structure(data)
+                header = structure.make_mmcif_headers().as_string().split("\n")
         elif isinstance(data, gemmi.Structure):
             structure = data
+            try:
+                header = structure.make_pdb_headers().split("\n")
+            except:
+                header = structure.make_mmcif_headers().as_string().split("\n")
         else:
             raise KeyError(
                 "data should be path str to a pdb file or a gemmi.Structure object"
@@ -145,8 +151,6 @@ class PDBParser(object):
             logger.info("No valid spacegroup in the file, set as P 1", flush=True)
         self.cell = structure.cell
 
-        # Save the pdb headers, exclude the CRYST1 line
-        header = structure.make_pdb_headers().split("\n")
         not_cryst = ["CRYST1" not in i for i in header]
         self.pdb_header = [header[i] for i in range(len(header)) if not_cryst[i]]
 
