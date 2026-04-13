@@ -1,0 +1,31 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Group non-numpy runtime deps for batch review",
+      "matchFileNames": ["pyproject.toml"],
+      "matchDepTypes": ["dependencies"],
+      "matchPackageNames": ["gemmi", "reciprocalspaceship", "tqdm", "loguru"],
+      "groupName": "runtime dependencies"
+    },
+    {
+      "description": "numpy gets its own PR for visibility",
+      "matchPackageNames": ["numpy"],
+      "labels": ["dependencies", "numpy"]
+    },
+    {
+      "description": "Group GitHub Actions updates and auto-merge",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions",
+      "automerge": true
+    },
+    {
+      "description": "Group dev/test dependencies and auto-merge",
+      "matchDepTypes": ["optional-dependencies"],
+      "groupName": "dev dependencies",
+      "automerge": true
+    }
+  ]
+}
