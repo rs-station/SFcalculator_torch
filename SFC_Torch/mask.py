@@ -80,7 +80,7 @@ def rsgrid2realmask(rs_grid, solvent_percent=0.50, exponent=50.0, Batch=False):
     return real_grid_mask
 
 
-def realmask2Fmask(real_grid_mask, H_array, batchsize=None):
+def realmask2Fmask(real_grid_mask, H_array, cell_volume=1.0, batchsize=None):
     """
     Convert real space solvent mask grid to mask structural factor, in a fully differentiable
     manner
@@ -93,12 +93,17 @@ def realmask2Fmask(real_grid_mask, H_array, batchsize=None):
     H_array: array-like, int
         The HKL list we are interested in to assign structural factors
 
+    cell_volume: float
+        Unit cell volume, used to normalize the FFT so that Fmask is on the same
+        absolute (electron) scale as the atomic structure factors Fprotein.
+        Fmask(h) = (V/N) * sum_j rho_j * exp(2*pi*i*h.r_j)
+
     Return:
     -------
     torch.complex64 tensor
     Solvent mask structural factor corresponding to the HKL list in H_array
     """
-    Fmask_grid = torch.fft.ifftn(real_grid_mask, dim=(-3, -2, -1), norm="forward")
+    Fmask_grid = torch.fft.ifftn(real_grid_mask, dim=(-3, -2, -1)) * cell_volume
     tuple_index = tuple(torch.tensor(H_array.T, device=Fmask_grid.device, dtype=int))  # type: ignore
     if batchsize is not None:
         Fmask = Fmask_grid[(slice(None), *tuple_index)]
