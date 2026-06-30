@@ -764,7 +764,7 @@ class SFcalculator(object):
             rs_grid, solvent_percent=solventpct, exponent=exponent, 
         )  # type: ignore
         if not self.HKL_array is None:
-            self.Fmask_HKL = realmask2Fmask(self.real_grid_mask, self.HKL_array)
+            self.Fmask_HKL = realmask2Fmask(self.real_grid_mask, self.HKL_array, cell_volume=self.unit_cell.volume)
             zero_hkl_bool = torch.tensor(self.dHKL <= dmin_nonzero, device=self.device)
             self.Fmask_HKL[zero_hkl_bool] = torch.tensor(
                 0.0, device=self.device, dtype=torch.complex64
@@ -772,7 +772,7 @@ class SFcalculator(object):
             if Return:
                 return self.Fmask_HKL
         else:
-            self.Fmask_asu = realmask2Fmask(self.real_grid_mask, self.Hasu_array)
+            self.Fmask_asu = realmask2Fmask(self.real_grid_mask, self.Hasu_array, cell_volume=self.unit_cell.volume)
             zero_hkl_bool = torch.tensor(self.dHasu <= dmin_nonzero, device=self.device)
             self.Fmask_asu[zero_hkl_bool] = torch.tensor(
                 0.0, device=self.device, dtype=torch.complex64
@@ -1384,7 +1384,9 @@ class SFcalculator(object):
             real_grid_mask = rsgrid2realmask(
                 rs_grid, solvent_percent=solventpct, exponent=exponent, Batch=True
             )  # type: ignore
-            Fmask_batch_j = realmask2Fmask(real_grid_mask, HKL_array, end - start)
+            Fmask_batch_j = realmask2Fmask(
+                real_grid_mask, HKL_array, cell_volume=self.unit_cell.volume, batchsize=end - start
+            )
             if j == 0:
                 Fmask_batch = Fmask_batch_j
             else:
