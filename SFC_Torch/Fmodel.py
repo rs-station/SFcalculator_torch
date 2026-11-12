@@ -11,7 +11,7 @@ Written in PyTorch
 """
 from __future__ import annotations
 
-from typing import Optional, List
+from typing import Optional, List, NamedTuple
 import gemmi
 import time
 import numpy as np
@@ -27,14 +27,24 @@ from .utils import r_factor, assert_numpy, assert_tensor
 from .packingscore import packingscore_voxelgrid_torch
 from .io import PDBParser
 from .streaming import f_protein_streamed, check_chunk_size
+from .compiled import f_protein_compiled
 
-FPROTEIN_BACKENDS = ("dense", "streamed")
+FPROTEIN_BACKENDS = ("dense", "streamed", "compiled")
 
 
 def _check_fprotein_backend(backend):
     if backend not in FPROTEIN_BACKENDS:
         raise ValueError(f"fprotein_backend must be one of {FPROTEIN_BACKENDS}, got {backend!r}")
     return backend
+
+
+class _ReciprocalInputs(NamedTuple):
+    """Device copies of `Hasu_array`/`dr2asu_array`, with the arrays they were made from."""
+
+    hkl_snapshot: np.ndarray
+    dr2_snapshot: np.ndarray
+    hkl: torch.Tensor
+    dr2: torch.Tensor
 
 
 class SFcalculator(object):
@@ -106,10 +116,11 @@ class SFcalculator(object):
         fprotein_backend: str, default "dense"
             How `calc_fprotein` computes the protein structure factor. "dense" is the original
             calculation. "streamed" processes reflections in tiles of `reflection_chunk_size`
-            to bound memory, recomputing the tiles during backward.
+            to bound memory, recomputing the tiles during backward. "compiled" is "streamed" with
+            tiles compiled by torch.compile; CUDA only, first-order gradients only.
 
         reflection_chunk_size: int, default 2048
-            Number of reflections per tile for the "streamed" backend. Larger tiles use more memory.
+            Number of reflections per tile for the "streamed" and "compiled" backends. Larger tiles use more memory.
         """
         
         self.fprotein_backend = _check_fprotein_backend(fprotein_backend)
@@ -578,6 +589,7 @@ class SFcalculator(object):
             device=self.device,
         )
         self._fullsf_tensor = None
+        self._compiled_reciprocal_inputs = None
         if self.fprotein_backend == "dense":
             _ = self.fullsf_tensor  # Build the per-atom table now, as before.
 
@@ -602,6 +614,29 @@ class SFcalculator(object):
     @fullsf_tensor.setter
     def fullsf_tensor(self, value):
         self._fullsf_tensor = value
+
+    def _get_compiled_reciprocal_inputs(self):
+        """
+        `Hasu_array` and `dr2asu_array` as float32 tensors on the model's device, cached across calls.
+
+        Both arrays are public and may be reassigned or edited in place, so the cache keeps
+        copies of them and is rebuilt when they differ.
+        """
+        cache = self._compiled_reciprocal_inputs
+        device = self.atom_pos_orth.device
+        if (
+            cache is None
+            or cache.hkl.device != device
+            or not np.array_equal(cache.hkl_snapshot, self.Hasu_array)
+            or not np.array_equal(cache.dr2_snapshot, self.dr2asu_array)
+        ):
+            # Create outside inference mode, so later training can reuse them.
+            with torch.inference_mode(False):
+                hkl = torch.tensor(self.Hasu_array, dtype=torch.float32, device=device)
+                dr2 = torch.tensor(self.dr2asu_array, dtype=torch.float32, device=device)
+            cache = _ReciprocalInputs(self.Hasu_array.copy(), self.dr2asu_array.copy(), hkl, dr2)
+            self._compiled_reciprocal_inputs = cache
+        return cache.hkl, cache.dr2
 
     def assign_resolution_bins(
         self, bins=10, Nmin=100, return_labels=False, format_str=".2f"
@@ -766,6 +801,9 @@ class SFcalculator(object):
         if self.fprotein_backend == "dense" or self._fullsf_tensor is not None:
             return F_protein(self.Hasu_array, self.dr2asu_array, self.fullsf_tensor, *atom_args)
         compact_args = (self._scattering_by_type, self._atom_type_indices, *atom_args)
+        if self.fprotein_backend == "compiled":
+            hkl, dr2 = self._get_compiled_reciprocal_inputs()
+            return f_protein_compiled(hkl, dr2, *compact_args, chunk_size=self.reflection_chunk_size)
         return f_protein_streamed(
             self.Hasu_array,
             self.dr2asu_array,

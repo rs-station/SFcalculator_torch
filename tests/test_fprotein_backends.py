@@ -4,25 +4,43 @@ Each backend must reproduce the dense structure factors and their gradients with
 respect to positions, B factors, anisotropic U and occupancies. ``SFcalculator``
 tests check that the default stays dense and that the public ``fullsf_tensor``
 attribute keeps working with the other backends.
+
+The real CUDA ``torch.compile`` path is opt-in: set ``SFC_TEST_COMPILED_CUDA=1`` on a
+CUDA machine. ``compiled-eager`` runs the same tile arithmetic without compiling, so
+CPU-only CI still covers it.
 """
+
+import os
 
 import numpy as np
 import pytest
 import torch
+from SFC_Torch.compiled import f_protein_compiled
 from SFC_Torch.Fmodel import F_protein, SFcalculator
 from SFC_Torch.streaming import f_protein_streamed
 
 CUDA = torch.cuda.is_available()
+COMPILED_CUDA = CUDA and os.environ.get("SFC_TEST_COMPILED_CUDA") == "1"
+COMPILED = pytest.param(
+    "compiled",
+    "cuda",
+    marks=pytest.mark.skipif(
+        not COMPILED_CUDA, reason="requires CUDA and SFC_TEST_COMPILED_CUDA=1"
+    ),
+    id="compiled-cuda",
+)
 BACKENDS = [
     pytest.param("streamed", "cpu", id="streamed-cpu"),
+    pytest.param("compiled-eager", "cpu", id="compiled-eager-cpu"),
     pytest.param(
         "streamed",
         "cuda",
         marks=pytest.mark.skipif(not CUDA, reason="requires CUDA"),
         id="streamed-cuda",
     ),
+    COMPILED,
 ]
-CALCULATORS = [pytest.param("streamed", "cpu", id="streamed-cpu")]
+CALCULATORS = [pytest.param("streamed", "cpu", id="streamed-cpu"), COMPILED]
 
 # Tolerances for structure factors, and for gradients. The B-factor gradients are
 # much smaller than the others, so they get a smaller absolute tolerance.
@@ -77,11 +95,26 @@ def _leaves(parameters):
 
 
 def _evaluate(backend, case, parameters, chunk_size):
-    """Evaluate ``backend`` ("dense" is the reference) on the same inputs."""
+    """Evaluate ``backend`` on the same inputs.
+
+    "dense" is the reference; "compiled-eager" is the compiled backend's tile
+    arithmetic run without ``torch.compile``.
+    """
     hkl, dr2, scattering, indices, *geometry = case
     if backend == "dense":
         return F_protein(hkl, dr2, scattering[indices], *geometry, *parameters)
-    return f_protein_streamed(*case, *parameters, chunk_size=chunk_size)
+    if backend == "streamed":
+        return f_protein_streamed(*case, *parameters, chunk_size=chunk_size)
+    return f_protein_compiled(
+        torch.tensor(hkl, dtype=torch.float32, device=scattering.device),
+        torch.tensor(dr2, dtype=torch.float32, device=scattering.device),
+        scattering,
+        indices,
+        *geometry,
+        *parameters,
+        chunk_size=chunk_size,
+        compile_kernel=backend == "compiled",
+    )
 
 
 def _assert_output_and_vjps(actual, expected, parameters, reference_parameters):
@@ -212,7 +245,7 @@ def test_calculator_inference_then_training(data_pdb, backend, device):
     assert calculator._fullsf_tensor is None
 
 
-@pytest.mark.parametrize("backend", ["streamed"])
+@pytest.mark.parametrize("backend", ["streamed", "compiled-eager"])
 def test_saved_tensors_stay_within_budget(backend):
     """Checkpointed backends keep no atoms-by-reflections tensors for backward.
 

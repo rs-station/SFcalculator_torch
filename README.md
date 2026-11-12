@@ -25,8 +25,8 @@ For a walkthrough tutorial, check this page: https://rs-station.github.io/SFcalc
 ### Memory-bounded structure factors
 
 By default, `calc_fprotein` builds several atoms-by-reflections tensors at once, which can
-run out of memory for large models. The opt-in `"streamed"` backend processes reflections in
-tiles instead, so this working memory scales with atoms × `reflection_chunk_size`:
+run out of memory for large models. The opt-in `"streamed"` and `"compiled"` backends process
+reflections in tiles instead, so this working memory scales with atoms × `reflection_chunk_size`:
 
 ```python
 from SFC_Torch import SFcalculator
@@ -42,11 +42,23 @@ fprotein = calculator.calc_fprotein(Return=True)
 |---|---|---|---|
 | `"dense"` (default) | CPU, CUDA | any order | Original calculation |
 | `"streamed"` | CPU, CUDA | any order | Recomputes tiles during backward: less memory, more compute |
+| `"compiled"` | CUDA | first order | `"streamed"` with tiles compiled by `torch.compile`; compiles on first use and needs a working CUDA `torch.compile` setup (see below) |
 
 Larger tiles use more memory; inputs and outputs still scale with the number of reflections.
 Do not modify the inputs before backward has finished. Reading or assigning `fullsf_tensor`
 switches the calculator back to the dense calculation, so in-place edits to it keep working;
 `calc_fprotein_batch` always uses the dense calculation.
+
+The `"compiled"` backend needs a working CUDA `torch.compile` setup. On first use, Triton
+builds a small C helper and compiles kernels, which requires a C compiler, the CUDA headers
+and `ptxas`. PyTorch installed from pip usually comes with a Triton that bundles the headers
+and `ptxas`. In a conda environment, install the toolkit for your CUDA version, e.g.
+`cuda-nvcc` (which also brings a matching compiler) and `cuda-cudart-dev`. Compile errors
+that mention `gcc`, `main.c` or `ptxas` point to this setup; you can check it with:
+
+```sh
+python -c "import torch; print(torch.compile(torch.sin)(torch.ones(1, device='cuda')))"
+```
 
 ### Citing
 
