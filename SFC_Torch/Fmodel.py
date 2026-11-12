@@ -541,17 +541,42 @@ class SFcalculator(object):
                 )
                 self.full_atomic_sf_asu[atom_type] = f0
 
-        if self.anomalous:
-            self.fullsf_tensor = torch.tensor(
-                np.array([self.full_atomic_sf_asu[atom] for atom in self.atom_name]),
-                device=self.device,
-            ).type(torch.complex64)
-        else:
-            self.fullsf_tensor = torch.tensor(
-                np.array([self.full_atomic_sf_asu[atom] for atom in self.atom_name]),
-                device=self.device,
-            ).type(torch.float32)
+        # Store scattering factors once per atom type, plus each atom's type. The
+        # per-atom table `fullsf_tensor` is derived from these (see the property).
+        atom_types = list(self.full_atomic_sf_asu)
+        type_index = {atom: i for i, atom in enumerate(atom_types)}
+        self._scattering_by_type = torch.tensor(
+            np.asarray([self.full_atomic_sf_asu[atom] for atom in atom_types]),
+            dtype=torch.complex64 if self.anomalous else torch.float32,
+            device=self.device,
+        )
+        self._atom_type_indices = torch.tensor(
+            [type_index[atom] for atom in self.atom_name],
+            dtype=torch.long,
+            device=self.device,
+        )
+        self._fullsf_tensor = None
+        _ = self.fullsf_tensor  # Build the per-atom table now, as before.
 
+    @property
+    def fullsf_tensor(self):
+        """
+        Per-atom scattering factors, [N_atoms, N_HKLs], built from the per-type table on first access.
+
+        The table is cached, so in-place edits to it persist.
+        """
+        if self._fullsf_tensor is None:
+            # Create outside inference mode: the cached table must stay usable for
+            # later gradient calculations and in-place edits.
+            with torch.inference_mode(False):
+                self._fullsf_tensor = self._scattering_by_type.index_select(
+                    0, self._atom_type_indices
+                )
+        return self._fullsf_tensor
+
+    @fullsf_tensor.setter
+    def fullsf_tensor(self, value):
+        self._fullsf_tensor = value
 
     def assign_resolution_bins(
         self, bins=10, Nmin=100, return_labels=False, format_str=".2f"
