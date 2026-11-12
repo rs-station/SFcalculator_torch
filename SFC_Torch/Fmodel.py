@@ -26,6 +26,16 @@ from .utils import vdw_rad_tensor, unitcell_grid_center, bin_by_logarithmic
 from .utils import r_factor, assert_numpy, assert_tensor
 from .packingscore import packingscore_voxelgrid_torch
 from .io import PDBParser
+from .streaming import f_protein_streamed, check_chunk_size
+
+FPROTEIN_BACKENDS = ("dense", "streamed")
+
+
+def _check_fprotein_backend(backend):
+    if backend not in FPROTEIN_BACKENDS:
+        raise ValueError(f"fprotein_backend must be one of {FPROTEIN_BACKENDS}, got {backend!r}")
+    return backend
+
 
 class SFcalculator(object):
     """
@@ -46,6 +56,8 @@ class SFcalculator(object):
         testset_value:  int = 0,
         device:         torch.device = try_gpu(),
         mode:           str = "xray",
+        fprotein_backend: str = "dense",
+        reflection_chunk_size: int = 2048,
     ) -> None:
         """
         Initialize with necessary reusable information, like spacegroup, unit cell info, HKL_list, et.c.
@@ -90,8 +102,18 @@ class SFcalculator(object):
 
         mode: str, default xray
             xray or cryoem, use xray atomic factors or elelctron atomic factors
+
+        fprotein_backend: str, default "dense"
+            How `calc_fprotein` computes the protein structure factor. "dense" is the original
+            calculation. "streamed" processes reflections in tiles of `reflection_chunk_size`
+            to bound memory, recomputing the tiles during backward.
+
+        reflection_chunk_size: int, default 2048
+            Number of reflections per tile for the "streamed" backend. Larger tiles use more memory.
         """
         
+        self.fprotein_backend = _check_fprotein_backend(fprotein_backend)
+        self.reflection_chunk_size = check_chunk_size(reflection_chunk_size, "reflection_chunk_size")
         self.wavelength = wavelength
         self.anomalous = anomalous
         self.device = device
@@ -556,14 +578,17 @@ class SFcalculator(object):
             device=self.device,
         )
         self._fullsf_tensor = None
-        _ = self.fullsf_tensor  # Build the per-atom table now, as before.
+        if self.fprotein_backend == "dense":
+            _ = self.fullsf_tensor  # Build the per-atom table now, as before.
 
     @property
     def fullsf_tensor(self):
         """
         Per-atom scattering factors, [N_atoms, N_HKLs], built from the per-type table on first access.
 
-        The table is cached, so in-place edits to it persist.
+        The table is cached, so in-place edits to it persist. Once it exists (after reading or
+        assigning this attribute), `calc_fprotein` uses it with the dense calculation whatever
+        `fprotein_backend` is, so such edits take effect. `calc_fprotein_batch` always uses it.
         """
         if self._fullsf_tensor is None:
             # Create outside inference mode: the cached table must stay usable for
@@ -714,18 +739,7 @@ class SFcalculator(object):
         if not atoms_occ_tensor is None:
             self.atom_occ = atoms_occ_tensor
 
-        self.Fprotein_asu = F_protein(
-            self.Hasu_array,
-            self.dr2asu_array,
-            self.fullsf_tensor,
-            self.R_G_tensor_stack,
-            self.T_G_tensor_stack,
-            self.orth2frac_tensor,
-            self.atom_pos_frac,
-            self.atom_b_iso,
-            self.atom_aniso_uw,
-            self.atom_occ,
-        )
+        self.Fprotein_asu = self._compute_fprotein_asu()
         if not self.HKL_array is None:
             self.Fprotein_HKL = self.Fprotein_asu[self.asu2HKL_index]
             self.Fmask_HKL = torch.zeros_like(self.Fprotein_HKL)
@@ -735,6 +749,29 @@ class SFcalculator(object):
             self.Fmask_asu = torch.zeros_like(self.Fprotein_asu)
             if Return:
                 return self.Fprotein_asu
+
+    def _compute_fprotein_asu(self):
+        """Protein structure factors of the reciprocal ASU, using `fprotein_backend`."""
+        _check_fprotein_backend(self.fprotein_backend)
+        atom_args = (
+            self.R_G_tensor_stack,
+            self.T_G_tensor_stack,
+            self.orth2frac_tensor,
+            self.atom_pos_frac,
+            self.atom_b_iso,
+            self.atom_aniso_uw,
+            self.atom_occ,
+        )
+        # Once `fullsf_tensor` was read or assigned, use it, so in-place edits apply.
+        if self.fprotein_backend == "dense" or self._fullsf_tensor is not None:
+            return F_protein(self.Hasu_array, self.dr2asu_array, self.fullsf_tensor, *atom_args)
+        compact_args = (self._scattering_by_type, self._atom_type_indices, *atom_args)
+        return f_protein_streamed(
+            self.Hasu_array,
+            self.dr2asu_array,
+            *compact_args,
+            chunk_size=self.reflection_chunk_size,
+        )
 
     def calc_fsolvent(
         self,
